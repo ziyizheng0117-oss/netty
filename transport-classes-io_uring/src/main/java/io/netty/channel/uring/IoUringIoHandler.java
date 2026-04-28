@@ -52,11 +52,10 @@ import static java.util.Objects.requireNonNull;
  */
 public final class IoUringIoHandler implements IoHandler {
     /*
-     * Design note: this is the bridge between Netty's transport-neutral IoHandler
-     * abstraction and Linux io_uring. Each IoUringIoHandler owns one kernel ring
-     * and is driven by one EventLoop thread in the common SINGLE_ISSUER mode.
-     * Channels do not call syscalls directly; they submit IoUringIoOps through an
-     * IoRegistration and are called back when CQEs are dispatched below.
+     * 设计说明：这是 Netty 与 Linux io_uring 之间的桥接层。每个 IoUringIoHandler
+     * 持有一个内核 io_uring ring；在常见的 SINGLE_ISSUER 模式下，由一个 EventLoop
+     * 线程驱动。Channel 不直接发起 syscall，而是通过 IoRegistration 提交
+     * IoUringIoOps，并在下面分发 CQE 时被回调。
      */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(IoUringIoHandler.class);
 
@@ -164,14 +163,14 @@ public final class IoUringIoHandler implements IoHandler {
     @Override
     public int run(IoHandlerContext context) {
         /*
-         * Main io_uring pump:
-         * 1. if there are no completions and the EventLoop may block, submit pending
-         *    SQEs and wait in io_uring_enter(), guarded by an io_uring timeout;
-         * 2. otherwise submit without blocking;
-         * 3. drain CQEs and dispatch them back to the registered Channel.
+         * io_uring 主循环：
+         * 1. 如果当前没有 completion，且 EventLoop 允许阻塞，则提交待处理 SQE，
+         *    并在 io_uring_enter() 中等待；等待过程由 io_uring timeout 约束。
+         * 2. 否则只做非阻塞提交。
+         * 3. 消费 CQE，并把 completion 分发回对应的 Channel。
          *
-         * This keeps Netty's EventLoop semantics while replacing epoll readiness
-         * notifications with io_uring completion events wherever possible.
+         * 这样既保留 Netty EventLoop 的语义，又尽可能用 io_uring completion
+         * 事件替代 epoll readiness 通知。
          */
         if (closeCompleted) {
             if (context.shouldReportActiveIoTime()) {
@@ -293,10 +292,10 @@ public final class IoUringIoHandler implements IoHandler {
 
     private void handle(int res, int flags, long udata, ByteBuffer extraCqeData) {
         /*
-         * CQE routing: io_uring gives us only res/flags/user_data. Netty packs the
-         * Channel registration id, opcode, and a small operation-local token into
-         * user_data when the SQE is submitted. Decoding it here lets one shared ring
-         * demultiplex completions for many Channels without fd lookups on the hot path.
+         * CQE 路由：io_uring 返回的核心信息只有 res/flags/user_data。Netty 在提交
+         * SQE 时，会把 Channel registration id、opcode 以及一个操作内局部 token
+         * 打包进 user_data。这里解码后，一个共享 ring 就能把 completion 分发给多个
+         * Channel，热路径上不需要再按 fd 查找。
          */
         try {
             int id = UserData.decodeId(udata);
@@ -339,10 +338,9 @@ public final class IoUringIoHandler implements IoHandler {
 
     private void submitEventFdRead() {
         /*
-         * Cross-thread wakeups are also modeled as io_uring completions: another
-         * thread writes to eventfd, and the EventLoop observes the completion of this
-         * IORING_OP_READ. This avoids mixing an epoll-style wakeup path into the ring
-         * driven loop.
+         * 跨线程唤醒也被建模成 io_uring completion：其他线程写 eventfd，EventLoop
+         * 通过这个 IORING_OP_READ 的 completion 感知唤醒。这样可以避免在 ring 驱动
+         * 的循环里混入一条 epoll 风格的唤醒路径。
          */
         SubmissionQueue submissionQueue = ringBuffer.ioUringSubmissionQueue();
         long udata = UserData.encode(EVENTFD_ID, Native.IORING_OP_READ, (short) 0);
@@ -558,9 +556,9 @@ public final class IoUringIoHandler implements IoHandler {
         @Override
         public long submit(IoOps ops) {
             /*
-             * Submission boundary for a Channel. If called off the EventLoop thread,
-             * enqueue the actual SQE write onto the owning executor so SINGLE_ISSUER
-             * rings remain valid and SQ/CQ memory is touched by the expected thread.
+             * Channel 的提交边界。如果调用发生在 EventLoop 线程之外，就把真正写 SQE
+             * 的动作投递回所属 executor。这样可以保证 SINGLE_ISSUER ring 的约束成立，
+             * SQ/CQ 共享内存也只由预期线程访问。
              */
             IoUringIoOps ioOps = (IoUringIoOps) ops;
             if (!isValid()) {

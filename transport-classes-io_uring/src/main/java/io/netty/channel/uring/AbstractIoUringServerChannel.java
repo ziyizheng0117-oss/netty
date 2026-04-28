@@ -35,9 +35,8 @@ import static io.netty.channel.unix.Errors.ERRNO_EWOULDBLOCK_NEGATIVE;
 
 abstract class AbstractIoUringServerChannel extends AbstractIoUringChannel implements ServerChannel {
     /*
-     * Server-side channel implementation. Accept is modeled as an io_uring read-like
-     * operation; when the kernel supports multishot accept, one SQE can yield multiple
-     * accepted child sockets before it has to be re-armed.
+     * 服务端 Channel 实现。accept 被建模成类似读的 io_uring 操作；当内核支持
+     * multishot accept 时，一个 SQE 可以产生多个已接受的子 socket，直到需要重新 arm。
      */
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
 

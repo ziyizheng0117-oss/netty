@@ -43,10 +43,10 @@ import static io.netty.channel.unix.Errors.ioResult;
 
 abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel implements DuplexChannel {
     /*
-     * Common TCP/stream implementation. It maps Netty's read/write state machine to
-     * io_uring operations: SEND/WRITEV for writes, RECV for reads, optional provided
-     * buffer rings for receive buffers, multishot receives when available, and splice
-     * or chunked FileRegion handling for file transfers.
+     * TCP/stream Channel 的通用实现。它把 Netty 的读写状态机映射到 io_uring 操作：
+     * 写路径使用 SEND/WRITEV，读路径使用 RECV；可选使用 provided buffer ring 管理
+     * 接收缓冲区；内核支持时启用 multishot receive；文件传输则使用 splice 或按块
+     * 转成 ByteBuf 后发送。
      */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AbstractIoUringStreamChannel.class);
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
@@ -417,10 +417,10 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
         @Override
         protected int scheduleRead0(boolean first, boolean socketIsEmpty) {
             /*
-             * Read scheduling chooses between two strategies:
-             * - normal path: allocate a ByteBuf and pass its direct memory address to RECV;
-             * - provided-buffer path: let the kernel select a buffer from a registered
-             *   buffer group and identify it via CQE flags.
+             * 读调度会在两种策略之间选择：
+             * - 普通路径：分配 ByteBuf，把 direct memory 地址传给 RECV。
+             * - provided-buffer 路径：让内核从已注册的 buffer group 中选择缓冲区，
+             *   并通过 CQE flags 返回具体 buffer id。
              */
             assert readBuffer == null;
             assert readId == 0 : readId;
@@ -457,10 +457,10 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
 
         private int scheduleReadProviderBuffer(IoUringBufferRing bufferRing, boolean first, boolean socketIsEmpty) {
             /*
-             * Provided buffer ring path. With IOSQE_BUFFER_SELECT the SQE contains a
-             * buffer group id instead of a concrete address. Newer kernels may also use
-             * multishot recv and RECVSEND_BUNDLE, meaning one SQE can produce many CQEs
-             * or one CQE can account for multiple filled buffers.
+             * provided buffer ring 路径。使用 IOSQE_BUFFER_SELECT 时，SQE 里放的是
+             * buffer group id，而不是具体内存地址。较新的内核还可能启用 multishot recv
+             * 和 RECVSEND_BUNDLE：前者允许一个 SQE 产生多个 CQE，后者允许一个 CQE
+             * 对应多个被填充的 buffer。
              */
             short bgId = bufferRing.bufferGroupId();
             try {
@@ -683,9 +683,8 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
         @Override
         boolean writeComplete0(byte op, int res, int flags, short data, int outstanding) {
             /*
-             * Write completions advance Netty's ChannelOutboundBuffer. Partial writes
-             * return false so the generic channel logic can arm POLLOUT and retry when
-             * the socket becomes writable again.
+             * 写 completion 会推进 Netty 的 ChannelOutboundBuffer。遇到 partial write 时
+             * 返回 false，让通用 Channel 逻辑注册 POLLOUT，并在 socket 再次可写后重试。
              */
             if ((flags & Native.IORING_CQE_F_NOTIF) == 0) {
                 // We only want to reset these if IORING_CQE_F_NOTIF is not set.

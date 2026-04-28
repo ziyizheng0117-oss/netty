@@ -26,9 +26,8 @@ import java.util.StringJoiner;
  */
 final class CompletionQueue {
     /*
-     * Java-side view of the mmap'ed completion queue. The kernel appends CQEs and
-     * Netty consumes them by reading user_data/res/flags directly from shared memory,
-     * then publishing the advanced head with release semantics.
+     * mmap 后的 completion queue 的 Java 视图。内核追加 CQE，Netty 直接从共享内存
+     * 读取 user_data/res/flags；消费完成后，用 release 语义发布推进后的 head。
      */
     private static final VarHandle INT_HANDLE =
             MethodHandles.byteBufferViewVarHandle(int[].class, ByteOrder.nativeOrder());
@@ -123,8 +122,8 @@ final class CompletionQueue {
      */
     int process(CompletionCallback callback) {
         /*
-         * Drain all visible CQEs. Mixed CQE mode and CQE32 are handled here, so upper
-         * layers can receive optional extra CQE data without knowing the ring layout.
+         * 消费当前可见的所有 CQE。mixed CQE 模式和 CQE32 在这里统一处理，因此上层
+         * 可以拿到可选的额外 CQE 数据，而不需要理解底层 ring 布局。
          */
         if (closed) {
             return 0;

@@ -29,9 +29,9 @@ import java.util.StringJoiner;
 
 final class SubmissionQueue {
     /*
-     * Java-side view of the mmap'ed io_uring submission queue. Netty writes SQE
-     * fields directly into shared ring memory using fixed struct offsets, keeping
-     * the hot path out of JNI except for io_uring_enter()/register/setup calls.
+     * mmap 后的 io_uring submission queue 的 Java 视图。Netty 按固定结构体偏移
+     * 直接把 SQE 字段写入共享 ring 内存；除 io_uring_enter/register/setup 这类必要
+     * 操作外，热路径尽量不经过 JNI。
      */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(SubmissionQueue.class);
 
@@ -135,7 +135,7 @@ final class SubmissionQueue {
     long enqueueSqe(byte opcode, byte flags, short ioPrio, int fd, long union1, long union2, int len,
                              int union3, long udata, short union4, short personality, int union5, long union6) {
         checkClosed();
-        // If the SQ is full, force a submit first so we can make room for this operation.
+        // 如果 SQ 已满，先强制 submit 一次，为当前操作腾出 SQE 空间。
         int pending = tail - head;
         if (pending == ringEntries) {
             int submitted = submit();

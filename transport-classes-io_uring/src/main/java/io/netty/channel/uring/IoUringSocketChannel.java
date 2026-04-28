@@ -32,9 +32,9 @@ import static io.netty.channel.unix.Errors.ioResult;
 
 public final class IoUringSocketChannel extends AbstractIoUringStreamChannel implements SocketChannel {
     /*
-     * TCP SocketChannel specialization. Besides the stream defaults, this class adds
-     * io_uring zero-copy send support and the delayed-release bookkeeping required
-     * because the kernel may still reference user buffers after the send CQE.
+     * TCP SocketChannel 的特化实现。除了 stream 通用逻辑外，这里增加 io_uring
+     * zero-copy send 支持；由于 send CQE 返回后内核仍可能引用用户态 buffer，
+     * 因此还需要维护延迟释放的 bookkeeping。
      */
     private final IoUringSocketChannelConfig config;
 
@@ -90,10 +90,9 @@ public final class IoUringSocketChannel extends AbstractIoUringStreamChannel imp
         @Override
         protected int scheduleWriteSingle(Object msg) {
             /*
-             * Large direct ByteBuf writes may use IORING_OP_SEND_ZC when supported and
-             * enabled by the channel config. Small writes intentionally fall back to the
-             * normal send path because zero-copy notification/page-pinning overhead can
-             * dominate small payloads.
+             * 较大的 direct ByteBuf 写入，在内核支持且 Channel 配置允许时，会使用
+             * IORING_OP_SEND_ZC。小包会有意回退到普通 send，因为 zero-copy 的
+             * notification 和 page pinning 成本可能超过收益。
              */
             assert writeId == 0;
 
@@ -201,9 +200,9 @@ public final class IoUringSocketChannel extends AbstractIoUringStreamChannel imp
 
         private boolean handleWriteCompleteZeroCopy(byte op, ChannelOutboundBuffer channelOutboundBuffer,
                                                     int res, int flags) {
-            // SEND_ZC/SENDMSG_ZC produce a data completion and, when MORE is set,
-            // a later notification CQE. Buffers must be retained until the notification
-            // proves the kernel no longer references them.
+            // SEND_ZC/SENDMSG_ZC 会产生一次数据 completion；如果 MORE 被设置，
+            // 后面还会有 notification CQE。buffer 必须保留到 notification 到达，
+            // 以确认内核已经不再引用它们。
             if ((flags & Native.IORING_CQE_F_NOTIF) == 0) {
                 // We only want to reset these if IORING_CQE_F_NOTIF is not set.
                 // If it's set we know this is only an extra notification for a write but we already handled
