@@ -42,6 +42,12 @@ import java.nio.channels.WritableByteChannel;
 import static io.netty.channel.unix.Errors.ioResult;
 
 abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel implements DuplexChannel {
+    /*
+     * Common TCP/stream implementation. It maps Netty's read/write state machine to
+     * io_uring operations: SEND/WRITEV for writes, RECV for reads, optional provided
+     * buffer rings for receive buffers, multishot receives when available, and splice
+     * or chunked FileRegion handling for file transfers.
+     */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AbstractIoUringStreamChannel.class);
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
 
@@ -410,6 +416,12 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
 
         @Override
         protected int scheduleRead0(boolean first, boolean socketIsEmpty) {
+            /*
+             * Read scheduling chooses between two strategies:
+             * - normal path: allocate a ByteBuf and pass its direct memory address to RECV;
+             * - provided-buffer path: let the kernel select a buffer from a registered
+             *   buffer group and identify it via CQE flags.
+             */
             assert readBuffer == null;
             assert readId == 0 : readId;
             final IoUringRecvByteAllocatorHandle allocHandle = recvBufAllocHandle();
@@ -444,6 +456,12 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
         }
 
         private int scheduleReadProviderBuffer(IoUringBufferRing bufferRing, boolean first, boolean socketIsEmpty) {
+            /*
+             * Provided buffer ring path. With IOSQE_BUFFER_SELECT the SQE contains a
+             * buffer group id instead of a concrete address. Newer kernels may also use
+             * multishot recv and RECVSEND_BUNDLE, meaning one SQE can produce many CQEs
+             * or one CQE can account for multiple filled buffers.
+             */
             short bgId = bufferRing.bufferGroupId();
             try {
                 boolean multishot = IoUring.isRecvMultishotEnabled();
@@ -664,6 +682,11 @@ abstract class AbstractIoUringStreamChannel extends AbstractIoUringChannel imple
 
         @Override
         boolean writeComplete0(byte op, int res, int flags, short data, int outstanding) {
+            /*
+             * Write completions advance Netty's ChannelOutboundBuffer. Partial writes
+             * return false so the generic channel logic can arm POLLOUT and retry when
+             * the socket becomes writable again.
+             */
             if ((flags & Native.IORING_CQE_F_NOTIF) == 0) {
                 // We only want to reset these if IORING_CQE_F_NOTIF is not set.
                 // If it's set we know this is only an extra notification for a write but we already handled

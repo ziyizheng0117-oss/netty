@@ -51,6 +51,13 @@ import static java.util.Objects.requireNonNull;
  * {@link IoHandler} which is implemented in terms of the Linux-specific {@code io_uring} API.
  */
 public final class IoUringIoHandler implements IoHandler {
+    /*
+     * Design note: this is the bridge between Netty's transport-neutral IoHandler
+     * abstraction and Linux io_uring. Each IoUringIoHandler owns one kernel ring
+     * and is driven by one EventLoop thread in the common SINGLE_ISSUER mode.
+     * Channels do not call syscalls directly; they submit IoUringIoOps through an
+     * IoRegistration and are called back when CQEs are dispatched below.
+     */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(IoUringIoHandler.class);
 
     private final RingBuffer ringBuffer;
@@ -156,6 +163,16 @@ public final class IoUringIoHandler implements IoHandler {
 
     @Override
     public int run(IoHandlerContext context) {
+        /*
+         * Main io_uring pump:
+         * 1. if there are no completions and the EventLoop may block, submit pending
+         *    SQEs and wait in io_uring_enter(), guarded by an io_uring timeout;
+         * 2. otherwise submit without blocking;
+         * 3. drain CQEs and dispatch them back to the registered Channel.
+         *
+         * This keeps Netty's EventLoop semantics while replacing epoll readiness
+         * notifications with io_uring completion events wherever possible.
+         */
         if (closeCompleted) {
             if (context.shouldReportActiveIoTime()) {
                 context.reportActiveIoTime(0);
@@ -275,6 +292,12 @@ public final class IoUringIoHandler implements IoHandler {
     }
 
     private void handle(int res, int flags, long udata, ByteBuffer extraCqeData) {
+        /*
+         * CQE routing: io_uring gives us only res/flags/user_data. Netty packs the
+         * Channel registration id, opcode, and a small operation-local token into
+         * user_data when the SQE is submitted. Decoding it here lets one shared ring
+         * demultiplex completions for many Channels without fd lookups on the hot path.
+         */
         try {
             int id = UserData.decodeId(udata);
             byte op = UserData.decodeOp(udata);
@@ -315,6 +338,12 @@ public final class IoUringIoHandler implements IoHandler {
     }
 
     private void submitEventFdRead() {
+        /*
+         * Cross-thread wakeups are also modeled as io_uring completions: another
+         * thread writes to eventfd, and the EventLoop observes the completion of this
+         * IORING_OP_READ. This avoids mixing an epoll-style wakeup path into the ring
+         * driven loop.
+         */
         SubmissionQueue submissionQueue = ringBuffer.ioUringSubmissionQueue();
         long udata = UserData.encode(EVENTFD_ID, Native.IORING_OP_READ, (short) 0);
 
@@ -528,6 +557,11 @@ public final class IoUringIoHandler implements IoHandler {
 
         @Override
         public long submit(IoOps ops) {
+            /*
+             * Submission boundary for a Channel. If called off the EventLoop thread,
+             * enqueue the actual SQE write onto the owning executor so SINGLE_ISSUER
+             * rings remain valid and SQ/CQ memory is touched by the expected thread.
+             */
             IoUringIoOps ioOps = (IoUringIoOps) ops;
             if (!isValid()) {
                 return INVALID_ID;

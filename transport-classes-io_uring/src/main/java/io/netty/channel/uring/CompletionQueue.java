@@ -25,6 +25,11 @@ import java.util.StringJoiner;
  * Completion queue implementation for io_uring.
  */
 final class CompletionQueue {
+    /*
+     * Java-side view of the mmap'ed completion queue. The kernel appends CQEs and
+     * Netty consumes them by reading user_data/res/flags directly from shared memory,
+     * then publishing the advanced head with release semantics.
+     */
     private static final VarHandle INT_HANDLE =
             MethodHandles.byteBufferViewVarHandle(int[].class, ByteOrder.nativeOrder());
 
@@ -117,6 +122,10 @@ final class CompletionQueue {
      * events.
      */
     int process(CompletionCallback callback) {
+        /*
+         * Drain all visible CQEs. Mixed CQE mode and CQE32 are handled here, so upper
+         * layers can receive optional extra CQE data without knowing the ring layout.
+         */
         if (closed) {
             return 0;
         }

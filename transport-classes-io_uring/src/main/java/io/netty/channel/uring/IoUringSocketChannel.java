@@ -31,6 +31,11 @@ import java.util.Queue;
 import static io.netty.channel.unix.Errors.ioResult;
 
 public final class IoUringSocketChannel extends AbstractIoUringStreamChannel implements SocketChannel {
+    /*
+     * TCP SocketChannel specialization. Besides the stream defaults, this class adds
+     * io_uring zero-copy send support and the delayed-release bookkeeping required
+     * because the kernel may still reference user buffers after the send CQE.
+     */
     private final IoUringSocketChannelConfig config;
 
     public IoUringSocketChannel() {
@@ -84,6 +89,12 @@ public final class IoUringSocketChannel extends AbstractIoUringStreamChannel imp
 
         @Override
         protected int scheduleWriteSingle(Object msg) {
+            /*
+             * Large direct ByteBuf writes may use IORING_OP_SEND_ZC when supported and
+             * enabled by the channel config. Small writes intentionally fall back to the
+             * normal send path because zero-copy notification/page-pinning overhead can
+             * dominate small payloads.
+             */
             assert writeId == 0;
 
             if (IoUring.isSendZcSupported() && msg instanceof ByteBuf) {
@@ -190,6 +201,9 @@ public final class IoUringSocketChannel extends AbstractIoUringStreamChannel imp
 
         private boolean handleWriteCompleteZeroCopy(byte op, ChannelOutboundBuffer channelOutboundBuffer,
                                                     int res, int flags) {
+            // SEND_ZC/SENDMSG_ZC produce a data completion and, when MORE is set,
+            // a later notification CQE. Buffers must be retained until the notification
+            // proves the kernel no longer references them.
             if ((flags & Native.IORING_CQE_F_NOTIF) == 0) {
                 // We only want to reset these if IORING_CQE_F_NOTIF is not set.
                 // If it's set we know this is only an extra notification for a write but we already handled

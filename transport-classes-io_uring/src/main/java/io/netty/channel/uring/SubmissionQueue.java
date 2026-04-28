@@ -28,6 +28,11 @@ import java.nio.ByteOrder;
 import java.util.StringJoiner;
 
 final class SubmissionQueue {
+    /*
+     * Java-side view of the mmap'ed io_uring submission queue. Netty writes SQE
+     * fields directly into shared ring memory using fixed struct offsets, keeping
+     * the hot path out of JNI except for io_uring_enter()/register/setup calls.
+     */
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(SubmissionQueue.class);
 
     static final int SQE_SIZE = 64;
@@ -130,6 +135,7 @@ final class SubmissionQueue {
     long enqueueSqe(byte opcode, byte flags, short ioPrio, int fd, long union1, long union2, int len,
                              int union3, long udata, short union4, short personality, int union5, long union6) {
         checkClosed();
+        // If the SQ is full, force a submit first so we can make room for this operation.
         int pending = tail - head;
         if (pending == ringEntries) {
             int submitted = submit();

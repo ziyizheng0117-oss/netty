@@ -34,6 +34,11 @@ import static io.netty.channel.unix.Errors.ERRNO_EAGAIN_NEGATIVE;
 import static io.netty.channel.unix.Errors.ERRNO_EWOULDBLOCK_NEGATIVE;
 
 abstract class AbstractIoUringServerChannel extends AbstractIoUringChannel implements ServerChannel {
+    /*
+     * Server-side channel implementation. Accept is modeled as an io_uring read-like
+     * operation; when the kernel supports multishot accept, one SQE can yield multiple
+     * accepted child sockets before it has to be re-armed.
+     */
     private static final ChannelMetadata METADATA = new ChannelMetadata(false, 16);
 
     private static final class AcceptedAddressMemory {
