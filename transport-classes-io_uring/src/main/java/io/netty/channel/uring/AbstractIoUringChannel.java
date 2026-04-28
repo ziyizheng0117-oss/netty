@@ -315,6 +315,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
 
     @Override
     protected final void doBeginRead() {
+        /*
+         * Netty 的 read() 语义仍然由 readPending 驱动。io_uring 可能已经有 multishot
+         * read 或 poll 正在挂起，因此这里不会盲目重复提交，只标记用户有读意愿，
+         * 再由状态机决定是直接 RECV 还是先 arm POLLIN。
+         */
         if (inputClosedSeenErrorOnRead) {
             // We did see an error while reading and so closed the input. Stop reading.
             return;
@@ -371,6 +376,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
     }
 
     private int scheduleWrite(ChannelOutboundBuffer in) {
+        /*
+         * 写路径根据 outbound buffer 形态选择 SQE：多消息或 CompositeByteBuf 使用
+         * gathering write，单个普通 ByteBuf 使用单次 send/write。具体 opcode 由子类
+         * 决定，例如 TCP SocketChannel 还可能切到 SEND_ZC。
+         */
         if (delayedClose != null || numOutstandingWrites == Short.MAX_VALUE) {
             return 0;
         }
@@ -451,6 +461,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
 
         @Override
         public final void handle(IoRegistration registration, IoEvent ioEvent) {
+            /*
+             * Channel 级 completion 分发点。IoUringIoHandler 已经用 user_data 找到
+             * registration；这里再按 opcode 分派到 read/write/poll/connect/cancel 等
+             * 状态机分支。
+             */
             IoUringIoEvent event = (IoUringIoEvent) ioEvent;
             byte op = event.opcode();
             int res = event.res();
@@ -584,6 +599,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
         }
 
         private boolean cancelOps(boolean cancelConnect) {
+            /*
+             * 关闭/注销 Channel 前，需要尽量 cancel 已提交但未完成的 poll/connect/read/write。
+             * io_uring completion 可能乱序回来，因此 Netty 通过 ioState、outstanding 计数和
+             * delayedClose 协调，避免 fd 关闭后仍处理旧 completion。
+             */
             if (registration == null || !registration.isValid()) {
                 return false;
             }
@@ -748,6 +768,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
         }
 
         private void readComplete(byte op, int res, int flags, short data) {
+            /*
+             * 读 completion 状态机需要同时兼容普通 read 和 multishot read：普通 read
+             * 收到预期数量 CQE 后清除 READ_SCHEDULED；multishot read 则依赖 CQE_F_MORE
+             * 判断是否还会继续产生 completion，并根据用户是否还 readPending 决定是否 cancel。
+             */
             assert numOutstandingReads > 0 || numOutstandingReads == -1 : numOutstandingReads;
 
             boolean multishot = numOutstandingReads == -1;
@@ -917,6 +942,10 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
          * @param res   the result.
          */
         private void pollOut(int res) {
+            /*
+             * POLLOUT 在两个场景复用：connect 尚未完成时用于 finishConnect；普通写遇到
+             * EAGAIN/partial write 时，用它等待 socket 再次可写，然后继续 flush。
+             */
             ioState &= ~POLL_OUT_SCHEDULED;
             pollOutId = 0;
             if (res == Native.ERRNO_ECANCELED_NEGATIVE) {
@@ -966,6 +995,11 @@ abstract class AbstractIoUringChannel extends AbstractChannel implements UnixCha
          * @param data  the data that was passed when submitting the op.
          */
         private void writeComplete(byte op, int res, int flags, short data) {
+            /*
+             * 写 completion 负责推进 outbound buffer、处理 TCP Fast Open 的特殊 connect
+             * 路径，以及在未写完时 arm POLLOUT。SEND_ZC 的 notification CQE 不会减少
+             * outstanding write 计数，因为它只是 buffer 生命周期通知。
+             */
             if ((ioState & CONNECT_SCHEDULED) != 0) {
                 // The writeComplete(...) callback was called because of a sendmsg(...) result that was used for
                 // TCP_FASTOPEN_CONNECT.

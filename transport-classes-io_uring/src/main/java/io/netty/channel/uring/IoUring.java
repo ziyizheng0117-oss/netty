@@ -27,6 +27,12 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.nio.ByteBuffer;
 
 public final class IoUring {
+    /*
+     * io_uring transport 的入口类：负责加载 native 库、检查内核/Java 版本、
+     * 创建一个临时 ring 做 feature probe，并把探测结果缓存成静态常量。
+     * 上层 Channel 不直接猜测内核版本，而是通过这里的 isXxxSupported()/
+     * isXxxEnabled() 决定是否启用 multishot、zero-copy、buffer ring 等能力。
+     */
 
     private static final Throwable UNAVAILABILITY_CAUSE;
     private static final boolean IORING_CQE_F_SOCK_NONEMPTY_SUPPORTED;
@@ -83,6 +89,12 @@ public final class IoUring {
 
         String kernelVersion = "[unknown]";
         try {
+            /*
+             * 可用性检查分两层：
+             * 1. 用户是否显式禁用 native transport；
+             * 2. 当前 JVM/内核/native 库是否真的支持 Netty 需要的 io_uring 能力。
+             * 失败原因会被保存在 UNAVAILABILITY_CAUSE，供 ensureAvailability() 抛出。
+             */
             if (SystemPropertyUtil.getBoolean("io.netty.transport.noNative", false)) {
                 cause = new UnsupportedOperationException(
                         "Native transport was explicit disabled with -Dio.netty.transport.noNative=true");
@@ -101,6 +113,8 @@ public final class IoUring {
                         // 160kb.
                         numElementsIoVec = SystemPropertyUtil.getInt(
                                 "io.netty.iouring.numElementsIoVec", 10 * Limits.IOV_MAX);
+                        // 用临时 ring 做运行时 probe：同一个 Netty jar 可能运行在不同内核上，
+                        // 所以这里不靠编译期常量，而是按当前机器实际支持的 opcode/flag 决策。
                         Native.IoUringProbe ioUringProbe = Native.ioUringProbe(ringBuffer.fd());
                         Native.checkAllIOSupported(ioUringProbe);
                         socketNonEmptySupported = Native.isCqeFSockNonEmptySupported(ioUringProbe);
@@ -164,6 +178,8 @@ public final class IoUring {
         IORING_REGISTER_BUFFER_RING_SUPPORTED = registerBufferRingSupported;
         IORING_REGISTER_BUFFER_RING_INC_SUPPORTED = registerBufferRingIncSupported;
 
+        // supported 表示内核具备能力；enabled 表示 Netty 最终会不会使用。
+        // enabled 还受系统属性控制，便于线上遇到内核 bug 或性能回退时快速关闭。
         IORING_ACCEPT_MULTISHOT_ENABLED = IORING_ACCEPT_MULTISHOT_SUPPORTED && SystemPropertyUtil.getBoolean(
                 "io.netty.iouring.acceptMultiShotEnabled", true);
         IORING_RECV_MULTISHOT_ENABLED = IORING_RECV_MULTISHOT_SUPPORTED && SystemPropertyUtil.getBoolean(
@@ -363,6 +379,11 @@ public final class IoUring {
     }
 
     static long memoryAddress(ByteBuf buffer) {
+        /*
+         * io_uring SQE 需要稳定的用户态内存地址。Netty 优先使用 ByteBuf 自带的
+         * memoryAddress；如果没有，就取 internalNioBuffer 的地址并叠加 position。
+         * 调用方需要保证提交到内核后，这块内存在 completion 前不会被提前释放。
+         */
         if (buffer.hasMemoryAddress()) {
             return buffer.memoryAddress();
         }

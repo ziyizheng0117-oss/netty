@@ -102,6 +102,11 @@ import java.util.Set;
  */
 
 public final class IoUringIoHandlerConfig {
+    /*
+     * IoUringIoHandler 的构造期配置。这里的选项会影响 ring 本身，而不是某个单独
+     * Channel：例如 SQ/CQ 大小、io-wq worker 上限、provided buffer ring、以及是否
+     * 使用 SINGLE_ISSUER。创建 handler 后这些配置基本就固定了。
+     */
 
     private int ringSize = IoUring.DEFAULT_RING_SIZE;
     private int cqSize = IoUring.DEFAULT_CQ_SIZE;
@@ -267,6 +272,10 @@ public final class IoUringIoHandlerConfig {
     }
 
     IoUringIoHandlerConfig verifyAndClone() {
+        /*
+         * factory 创建 handler 前会先校验配置是否与当前内核能力匹配，并复制一份快照。
+         * 这样用户之后继续修改 config 对已经创建的 factory/handler 不会产生隐式影响。
+         */
         // Ensure that we load all native bits as otherwise it may fail when try to use native methods in IovArray
         IoUring.ensureAvailability();
 

@@ -26,6 +26,12 @@ import java.util.Arrays;
 import java.util.function.Consumer;
 
 final class IoUringBufferRing {
+    /*
+     * io_uring provided buffer ring 的 Java 管理器。Netty 预先把一批 ByteBuf 的
+     * 地址注册到内核；RECV 使用 IOSQE_BUFFER_SELECT 后，内核会从这个组里挑 buffer
+     * 填充，并在 CQE flags 中返回 bid。这样读路径可以减少每次提交前分配/传递
+     * buffer 地址的成本。
+     */
     private static final VarHandle SHORT_HANDLE =
             MethodHandles.byteBufferViewVarHandle(short[].class, ByteOrder.nativeOrder());
     private final ByteBuffer ioUringBufRing;
@@ -85,6 +91,10 @@ final class IoUringBufferRing {
         private short oldTail;
 
         short fill(short startBid, int numBuffers) {
+            /*
+             * 批量补充 buffer 到 ring：先记录旧 tail，逐个写入 addr/len/bid，最后
+             * 再用 release 语义推进 tail。这样内核不会看到只写了一半的 buffer entry。
+             */
             // Fetch the tail once before allocate the batch.
             oldTail = (short) SHORT_HANDLE.get(ioUringBufRing, tailFieldPosition);
 
@@ -139,6 +149,7 @@ final class IoUringBufferRing {
         }
 
         private void add(int tail, short bid, int offset, ByteBuf byteBuf) {
+            // 一个 ring entry 只保存内核需要的信息：用户内存地址、可写长度和 buffer id。
             short ringIndex = (short) ((tail + offset) & mask);
             assert buffers[bid] == null;
 
@@ -218,6 +229,11 @@ final class IoUringBufferRing {
      * @return              the buffer.
      */
     ByteBuf useBuffer(short bid, int read, boolean more) {
+        /*
+         * CQE 返回 bid 后，读路径调用这里取出对应 ByteBuf。返回 retainedSlice，避免
+         * 后续 pipeline 修改原始 buffer 的 writerIndex/生命周期。incremental buffer ring
+         * 可以在 MORE 场景下复用同一个底层 buffer 的剩余空间。
+         */
         assert read > 0;
         ByteBuf byteBuf = buffers[bid];
 
@@ -235,6 +251,8 @@ final class IoUringBufferRing {
         buffers[bid] = null;
         byteBuf.release();
         if (--usableBuffers == 0) {
+            // 当前可用 buffer 全部被消费后，按批次重新填充；如果之前收到 NOBUFS，
+            // 这里会尝试扩大已分配 buffer 数量。
             int numBuffers = allocatedBuffers;
             if (needExpand) {
                 // We did get a signal that our buffer ring did not have enough buffers, let's see if we
