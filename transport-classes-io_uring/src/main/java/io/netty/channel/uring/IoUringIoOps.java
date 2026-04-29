@@ -23,6 +23,8 @@ import io.netty.channel.IoOps;
  */
 public final class IoUringIoOps implements IoOps {
 
+    // 注意：这些字段不是业务语义字段，而是对 io_uring_sqe 固定二进制布局的“逐槽位映射”。
+    // 每个 newXxx(...) 工厂方法都在按 opcode 约定复用 union1..union6，不同操作的含义不同。
     private final byte opcode;
     private final byte flags;
     private final short ioPrio;

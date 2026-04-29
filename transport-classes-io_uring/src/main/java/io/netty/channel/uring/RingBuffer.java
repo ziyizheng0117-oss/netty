@@ -34,6 +34,8 @@ final class RingBuffer {
      * {@link SubmissionQueue#submitAndWait()}.
      */
     void enable() {
+        // 先从 disabled ring 显式切到 enabled；随后再注册 enterRingFd。
+        // 这两个步骤需要在同一提交线程完成，避免 enter 路径和注册状态不一致。
         // We create our ring in disabled mode and so need to enable it first.
         Native.ioUringRegisterEnableRings(fd());
         // Now also register the ring filedescriptor itself. This needs to happen in the same thread

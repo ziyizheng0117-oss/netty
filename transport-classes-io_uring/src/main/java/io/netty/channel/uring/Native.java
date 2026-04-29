@@ -397,6 +397,8 @@ final class Native {
     }
 
     static RingBuffer createRingBuffer(int ringSize, int cqeSize, int setupFlags) {
+        // JNI 返回固定 20 槽 long[] 协议：前 10 槽是 CQ 元数据，后 9 槽是 SQ 元数据，最后 1 槽是 features。
+        // 这里仅做“地址包装 + 视图构造”，热路径后续直接操作 mmap 内存，避免每次经 JNI。
         ObjectUtil.checkPositive(ringSize, "ringSize");
         ObjectUtil.checkPositive(cqeSize, "cqeSize");
         long[] values = ioUringSetup(ringSize, cqeSize, setupFlags);

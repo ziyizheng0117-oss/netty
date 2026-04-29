@@ -134,6 +134,8 @@ final class SubmissionQueue {
 
     long enqueueSqe(byte opcode, byte flags, short ioPrio, int fd, long union1, long union2, int len,
                              int union3, long udata, short union4, short personality, int union5, long union6) {
+        // 这里是 Netty io_uring 写路径的核心：把一条逻辑 IO 请求序列化成一条 SQE。
+        // 参数命名沿用 union1..union6，是因为它们必须和内核 struct io_uring_sqe 的 union 槽位逐字节对齐。
         checkClosed();
         // 如果 SQ 已满，先强制 submit 一次，为当前操作腾出 SQE 空间。
         int pending = tail - head;
@@ -277,6 +279,8 @@ final class SubmissionQueue {
     }
 
     private int submit(int toSubmit, int minComplete, int flags) {
+        // 发布顺序：先 release 写 ktail 再 enter；内核据此看见新 SQE。
+        // enter 返回后再 volatile 读 khead，和内核消费进度建立 happens-before。
         INT_HANDLE.setRelease(kTail, 0, tail);
         int ret = ioUringEnter(toSubmit, minComplete, flags);
         head = (int) INT_HANDLE.getVolatile(kHead, 0); // acquire memory barrier
@@ -289,6 +293,8 @@ final class SubmissionQueue {
     }
 
     private int ioUringEnter(int toSubmit, int minComplete, int flags) {
+        // 老内核无 SUBMIT_ALL 时，io_uring_enter 可能在首个 inline 失败处提前返回。
+        // 所以这里循环补提，直到本批 SQE 全部进入内核可见队列。
         int f = enterFlags | flags;
 
         if (IoUring.isSetupSubmitAllSupported()) {
